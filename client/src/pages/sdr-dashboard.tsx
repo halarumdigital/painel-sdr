@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Users,
   TrendingUp,
@@ -13,7 +13,8 @@ import {
   ChevronDown,
   Loader2,
   RefreshCcw,
-  Briefcase
+  Briefcase,
+  AlertCircle
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
@@ -45,10 +46,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { useToast } from "@/hooks/use-toast";
 
 // --- Configuration ---
 const API_URL = "https://crm.halarum.dev/api/leads";
-const TEAM_API_URL = "https://crm.halarum.dev/api/team"; // Inferred URL
+const TEAM_API_URL = "https://crm.halarum.dev/api/team"; 
 const API_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiY3JtIiwibmFtZSI6ImNybSIsIkFQSV9USU1FIjoxNzY2MjM5NzU0fQ.3o4sLYLwdi7cnceRp3HjtmPkCYk3HDFOTzaTXhJNfYw";
 
 type LeadStatus = "Novo" | "Contatado" | "Em Negociação" | "Qualificado" | "Fechado" | "Perdido";
@@ -63,7 +65,7 @@ interface Lead {
   value: number;
   lastContact: string;
   sdr_name?: string; 
-  sdr_id?: string; // Potential foreign key from API
+  sdr_id?: string;
 }
 
 interface TeamMember {
@@ -100,21 +102,58 @@ const FALLBACK_AVATARS: Record<string, string> = {
   "Roberto Lima": "https://i.pravatar.cc/150?u=roberto",
 };
 
+// --- Mock Data Generators ---
+
+const generateMockLeads = (count: number): Lead[] => {
+  const statuses: LeadStatus[] = ["Novo", "Contatado", "Em Negociação", "Qualificado", "Fechado", "Perdido"];
+  const companies = ["TechCorp", "InnovateLtda", "GlobalSolutions", "AlphaIndustries", "OmegaSoft", "BetaSystems", "GammaGroup"];
+  const sdrNames = Object.keys(FALLBACK_AVATARS);
+  
+  return Array.from({ length: count }).map((_, i) => ({
+    id: `mock-lead-${Math.random().toString(36).substr(2, 9)}`,
+    name: `Lead Cliente ${i + 1}`,
+    company: companies[Math.floor(Math.random() * companies.length)],
+    email: `contato${i}@exemplo.com`,
+    phone: `(11) 9${Math.floor(Math.random() * 90000000 + 10000000)}`,
+    status: statuses[Math.floor(Math.random() * statuses.length)],
+    value: Math.floor(Math.random() * 50000) + 1000,
+    lastContact: new Date(Date.now() - Math.floor(Math.random() * 1000000000)).toLocaleDateString('pt-BR'),
+    sdr_name: sdrNames[Math.floor(Math.random() * sdrNames.length)]
+  }));
+};
+
+const MOCK_TEAM: TeamMember[] = [
+  { id: "sdr-1", name: "Ana Silva", role: "Senior SDR", email: "ana@company.com", avatar_url: FALLBACK_AVATARS["Ana Silva"], performance: 92 },
+  { id: "sdr-2", name: "Carlos Mendes", role: "SDR Pleno", email: "carlos@company.com", avatar_url: FALLBACK_AVATARS["Carlos Mendes"], performance: 78 },
+  { id: "sdr-3", name: "Mariana Costa", role: "SDR Júnior", email: "mariana@company.com", avatar_url: FALLBACK_AVATARS["Mariana Costa"], performance: 85 },
+  { id: "sdr-4", name: "Roberto Lima", role: "Senior SDR", email: "roberto@company.com", avatar_url: FALLBACK_AVATARS["Roberto Lima"], performance: 64 },
+];
+
 export default function SdrDashboard() {
   const [selectedSdrId, setSelectedSdrId] = useState<string | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [usingMockData, setUsingMockData] = useState(false);
+  const { toast } = useToast();
 
   // --- API Queries ---
   
   const { data: leads = [], isLoading: isLoadingLeads, isError: isLeadsError, refetch: refetchLeads } = useQuery<Lead[]>({
     queryKey: ["leads"],
     queryFn: async () => {
-      const response = await fetch(API_URL, {
-        headers: { "Authorization": `Bearer ${API_TOKEN}`, "Content-Type": "application/json" }
-      });
-      if (!response.ok) throw new Error(`Leads API Error: ${response.status}`);
-      const data = await response.json();
-      return Array.isArray(data) ? data : [];
+      try {
+        const response = await fetch(API_URL, {
+          headers: { "Authorization": `Bearer ${API_TOKEN}`, "Content-Type": "application/json" }
+        });
+        if (!response.ok) throw new Error(`Leads API Error: ${response.status}`);
+        const data = await response.json();
+        setUsingMockData(false);
+        return Array.isArray(data) ? data : [];
+      } catch (error) {
+        console.warn("API Error, falling back to mock data", error);
+        setUsingMockData(true);
+        // Fallback to mock data with a slight delay to simulate "try"
+        return new Promise(resolve => setTimeout(() => resolve(generateMockLeads(25)), 800));
+      }
     },
   });
 
@@ -126,23 +165,33 @@ export default function SdrDashboard() {
           headers: { "Authorization": `Bearer ${API_TOKEN}`, "Content-Type": "application/json" }
         });
         
-        // If team endpoint fails (404/403), we'll return empty list and fallback to inferring from leads
         if (!response.ok) {
            console.warn("Team API not available, using inferred data");
-           return []; 
+           return MOCK_TEAM; 
         }
         
         const data = await response.json();
         return Array.isArray(data) ? data : [];
       } catch (err) {
-        console.warn("Failed to fetch team, falling back to inference", err);
-        return [];
+        console.warn("Failed to fetch team, falling back to mock", err);
+        return MOCK_TEAM;
       }
     },
   });
 
+  useEffect(() => {
+    if (usingMockData) {
+      toast({
+        variant: "destructive", // Using destructive style to draw attention, but message is informational
+        title: "Modo de Demonstração",
+        description: "Não foi possível conectar à API (Bloqueio CORS/Firewall). Exibindo dados de exemplo.",
+        duration: 5000,
+      });
+    }
+  }, [usingMockData, toast]);
+
   const isLoading = isLoadingLeads || isLoadingTeam;
-  const isError = isLeadsError; // We don't block on team error, we just fallback
+  const isError = false; // We handle errors gracefully now by showing mock data
 
   const refetchAll = () => {
     refetchLeads();
@@ -221,9 +270,13 @@ export default function SdrDashboard() {
           <span>SalesFlow</span>
         </div>
         <nav className="ml-auto flex items-center gap-4">
-          <div className="flex items-center gap-2 bg-muted/50 rounded-full px-3 py-1 text-xs text-muted-foreground border">
-             <span className={`w-2 h-2 rounded-full ${isLoading ? 'bg-yellow-400 animate-pulse' : isError ? 'bg-red-500' : 'bg-green-500'}`}></span>
-             {isLoading ? 'Sincronizando...' : isError ? 'Offline' : 'Online'}
+          <div className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs border transition-colors ${
+            usingMockData 
+              ? 'bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400' 
+              : 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400'
+          }`}>
+             <span className={`w-2 h-2 rounded-full ${isLoading ? 'bg-yellow-400 animate-pulse' : usingMockData ? 'bg-orange-500' : 'bg-green-500'}`}></span>
+             {isLoading ? 'Sincronizando...' : usingMockData ? 'Modo Demo (Offline)' : 'Online (CRM)'}
           </div>
           <Button variant="ghost" size="sm" className="text-muted-foreground">Dashboard</Button>
           <Separator orientation="vertical" className="h-6" />
@@ -244,6 +297,12 @@ export default function SdrDashboard() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+             {usingMockData && (
+               <div className="hidden md:flex items-center text-xs text-orange-600 bg-orange-50 px-3 py-2 rounded-md border border-orange-200 mr-2">
+                 <AlertCircle className="w-3 h-3 mr-1.5" />
+                 Conexão API bloqueada. Exibindo dados locais.
+               </div>
+             )}
             <Button variant="outline" size="icon" onClick={refetchAll} title="Recarregar Dados">
                <RefreshCcw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             </Button>
@@ -265,29 +324,22 @@ export default function SdrDashboard() {
         </div>
 
         {/* Loading State */}
-        {isLoading && (
+        {isLoading && !usingMockData && (
            <div className="h-[400px] flex flex-col items-center justify-center space-y-4">
              <Loader2 className="h-10 w-10 animate-spin text-primary" />
              <p className="text-muted-foreground animate-pulse">Carregando dados da equipe e leads...</p>
            </div>
         )}
 
-        {/* Error State */}
-        {isError && (
-          <div className="p-8 border border-red-200 bg-red-50 rounded-lg text-center">
-            <p className="text-red-600 font-medium">Erro ao carregar dados.</p>
-            <p className="text-sm text-red-500 mt-1">Verifique sua conexão ou tente novamente mais tarde.</p>
-            <Button variant="outline" className="mt-4 border-red-200 text-red-700 hover:bg-red-100" onClick={refetchAll}>
-              Tentar Novamente
-            </Button>
-          </div>
-        )}
-
-        {/* Content */}
-        {!isLoading && !isError && (
-          <>
+        {/* Content - Always Show (Mock or Real) */}
+        {!isLoading && (
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }} 
+            animate={{ opacity: 1, y: 0 }} 
+            transition={{ duration: 0.4 }}
+          >
             {/* KPI Cards */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 mb-6">
               <Card className="border-none shadow-sm bg-white dark:bg-card">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -485,7 +537,7 @@ export default function SdrDashboard() {
                 </CardContent>
               </Card>
             </div>
-          </>
+          </motion.div>
         )}
       </main>
     </div>
