@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { useLocation } from "wouter";
 import {
   Users,
   TrendingUp,
@@ -21,7 +22,9 @@ import {
   Timer,
   AlertTriangle,
   UserCheck2,
-  UserX
+  UserX,
+  LogOut,
+  Shield
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
@@ -69,6 +72,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/auth-context";
 
 // --- Configuration ---
 const API_URL = "/api/leads";
@@ -154,6 +158,8 @@ const getStatusColor = (status: string) => {
 };
 
 export default function SdrDashboard() {
+  const [, setLocation] = useLocation();
+  const { user, logout, isAdmin } = useAuth();
   const [selectedSdrId, setSelectedSdrId] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [dateRange, setDateRange] = useState<{ from: Date; to: Date }>({
@@ -204,8 +210,15 @@ export default function SdrDashboard() {
   // --- Filtered Data ---
   const filteredLeads = useMemo(() => {
     return leads.filter(lead => {
-      // Filter by SDR
-      if (selectedSdrId !== "all" && lead.assigned !== selectedSdrId) {
+      // If user is SDR, only show their own leads
+      if (!isAdmin && user?.staffId) {
+        if (lead.assigned !== user.staffId) {
+          return false;
+        }
+      }
+
+      // Filter by SDR (only for admins)
+      if (isAdmin && selectedSdrId !== "all" && lead.assigned !== selectedSdrId) {
         return false;
       }
 
@@ -233,7 +246,7 @@ export default function SdrDashboard() {
 
       return true;
     });
-  }, [leads, selectedSdrId, dateRange, searchQuery]);
+  }, [leads, selectedSdrId, dateRange, searchQuery, isAdmin, user?.staffId]);
 
   // --- KPI Calculations ---
   const totalLeads = filteredLeads.length;
@@ -411,6 +424,11 @@ export default function SdrDashboard() {
     return sdr?.avatar_url || FALLBACK_AVATARS[sdr?.name || ""] || `https://ui-avatars.com/api/?name=${encodeURIComponent(sdr?.name || "NA")}&background=random`;
   };
 
+  const handleLogout = async () => {
+    await logout();
+    setLocation("/login");
+  };
+
   return (
     <div className="min-h-screen bg-gray-50/50 dark:bg-gray-950 font-sans pb-10">
       {/* Header */}
@@ -424,10 +442,43 @@ export default function SdrDashboard() {
             <span className={`w-2 h-2 rounded-full ${isLoading ? 'bg-yellow-400 animate-pulse' : 'bg-green-500'}`}></span>
             {isLoading ? 'Sincronizando...' : 'Online (CRM)'}
           </div>
-          <Avatar className="h-8 w-8 cursor-pointer">
-            <AvatarImage src="https://github.com/shadcn.png" />
-            <AvatarFallback>AD</AvatarFallback>
-          </Avatar>
+          {isAdmin && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => setLocation("/users")}
+              >
+                <Users className="h-4 w-4" />
+                <span className="hidden sm:inline">Usuários</span>
+              </Button>
+              <Badge variant="outline" className="gap-1 bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400">
+                <Shield className="h-3 w-3" />
+                Admin
+              </Badge>
+            </>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="flex items-center gap-2 h-9 px-2">
+                <Avatar className="h-7 w-7">
+                  <AvatarImage src={`https://ui-avatars.com/api/?name=${encodeURIComponent(user?.name || "User")}&background=random`} />
+                  <AvatarFallback>{user?.name?.charAt(0) || "U"}</AvatarFallback>
+                </Avatar>
+                <span className="text-sm font-medium hidden sm:block">{user?.name}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                {user?.username}
+              </div>
+              <DropdownMenuItem onClick={handleLogout} className="text-red-600 cursor-pointer">
+                <LogOut className="mr-2 h-4 w-4" />
+                Sair
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </nav>
       </header>
 
@@ -435,9 +486,14 @@ export default function SdrDashboard() {
         {/* Title & Filters */}
         <div className="flex flex-col gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard SDR</h1>
+            <h1 className="text-3xl font-bold tracking-tight text-foreground">
+              {isAdmin ? "Dashboard SDR" : `Meus Leads`}
+            </h1>
             <p className="text-muted-foreground mt-1">
-              Acompanhamento de leads e performance da equipe
+              {isAdmin
+                ? "Acompanhamento de leads e performance da equipe"
+                : `Olá ${user?.name}, acompanhe seus leads e performance`
+              }
             </p>
           </div>
 
@@ -448,19 +504,21 @@ export default function SdrDashboard() {
               <RefreshCcw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             </Button>
 
-            {/* SDR Filter */}
-            <Select value={selectedSdrId} onValueChange={setSelectedSdrId}>
-              <SelectTrigger className="w-[200px] bg-background">
-                <UserCheck className="h-4 w-4 mr-2 text-muted-foreground" />
-                <SelectValue placeholder="Filtrar por SDR" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos os SDRs</SelectItem>
-                {team.map(member => (
-                  <SelectItem key={member.id} value={member.id}>{member.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {/* SDR Filter - Only visible for admins */}
+            {isAdmin && (
+              <Select value={selectedSdrId} onValueChange={setSelectedSdrId}>
+                <SelectTrigger className="w-[200px] bg-background">
+                  <UserCheck className="h-4 w-4 mr-2 text-muted-foreground" />
+                  <SelectValue placeholder="Filtrar por SDR" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os SDRs</SelectItem>
+                  {team.map(member => (
+                    <SelectItem key={member.id} value={member.id}>{member.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
 
             {/* Date Range Filter */}
             <Popover open={isDatePickerOpen} onOpenChange={setIsDatePickerOpen}>

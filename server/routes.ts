@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { setupAuth, registerAuthRoutes, requireAuth } from "./auth";
 
 const CRM_API_URL = process.env.CRM_API_URL || "https://crm.halarum.dev/api/leads";
 const CRM_API_TOKEN = process.env.CRM_API_TOKEN || "";
@@ -13,6 +14,9 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // Setup authentication
+  setupAuth(app);
+  registerAuthRoutes(app);
   // Proxy route for leads API
   app.get("/api/leads", async (req, res) => {
     try {
