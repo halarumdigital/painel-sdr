@@ -12,7 +12,8 @@ import {
   ArrowUpRight,
   ChevronDown,
   Loader2,
-  RefreshCcw
+  RefreshCcw,
+  Briefcase
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
@@ -46,9 +47,8 @@ import {
 import { Separator } from "@/components/ui/separator";
 
 // --- Configuration ---
-// In a real app with Vite, these should be import.meta.env.VITE_CRM_API_URL
-// We are using the provided values directly for this prototype connection
 const API_URL = "https://crm.halarum.dev/api/leads";
+const TEAM_API_URL = "https://crm.halarum.dev/api/team"; // Inferred URL
 const API_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiY3JtIiwibmFtZSI6ImNybSIsIkFQSV9USU1FIjoxNzY2MjM5NzU0fQ.3o4sLYLwdi7cnceRp3HjtmPkCYk3HDFOTzaTXhJNfYw";
 
 type LeadStatus = "Novo" | "Contatado" | "Em Negociação" | "Qualificado" | "Fechado" | "Perdido";
@@ -62,17 +62,22 @@ interface Lead {
   status: LeadStatus;
   value: number;
   lastContact: string;
-  sdr_name?: string; // API might return this
+  sdr_name?: string; 
+  sdr_id?: string; // Potential foreign key from API
 }
 
-interface SDR {
+interface TeamMember {
   id: string;
   name: string;
   role: string;
-  avatar?: string;
   email: string;
-  performance: number; // 0-100
+  avatar_url?: string;
+  performance?: number;
+}
+
+interface SDR extends TeamMember {
   leads: Lead[];
+  performance: number;
 }
 
 const getStatusColor = (status: string) => {
@@ -87,81 +92,109 @@ const getStatusColor = (status: string) => {
   }
 };
 
-// Default SDRs metadata to map names to avatars
-const SDR_METADATA: Record<string, Partial<SDR>> = {
-  "Ana Silva": { role: "Senior SDR", avatar: "https://i.pravatar.cc/150?u=ana", performance: 88 },
-  "Carlos Mendes": { role: "SDR Pleno", avatar: "https://i.pravatar.cc/150?u=carlos", performance: 72 },
-  "Mariana Costa": { role: "SDR Júnior", avatar: "https://i.pravatar.cc/150?u=mariana", performance: 94 },
-  "Roberto Lima": { role: "Senior SDR", avatar: "https://i.pravatar.cc/150?u=roberto", performance: 65 },
+// Fallback avatars if API doesn't provide them
+const FALLBACK_AVATARS: Record<string, string> = {
+  "Ana Silva": "https://i.pravatar.cc/150?u=ana",
+  "Carlos Mendes": "https://i.pravatar.cc/150?u=carlos",
+  "Mariana Costa": "https://i.pravatar.cc/150?u=mariana",
+  "Roberto Lima": "https://i.pravatar.cc/150?u=roberto",
 };
 
 export default function SdrDashboard() {
   const [selectedSdrId, setSelectedSdrId] = useState<string | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // --- API Query ---
-  const { data: leads = [], isLoading, isError, refetch } = useQuery<Lead[]>({
+  // --- API Queries ---
+  
+  const { data: leads = [], isLoading: isLoadingLeads, isError: isLeadsError, refetch: refetchLeads } = useQuery<Lead[]>({
     queryKey: ["leads"],
     queryFn: async () => {
+      const response = await fetch(API_URL, {
+        headers: { "Authorization": `Bearer ${API_TOKEN}`, "Content-Type": "application/json" }
+      });
+      if (!response.ok) throw new Error(`Leads API Error: ${response.status}`);
+      const data = await response.json();
+      return Array.isArray(data) ? data : [];
+    },
+  });
+
+  const { data: team = [], isLoading: isLoadingTeam, isError: isTeamError, refetch: refetchTeam } = useQuery<TeamMember[]>({
+    queryKey: ["team"],
+    queryFn: async () => {
       try {
-        const response = await fetch(API_URL, {
-          headers: {
-            "Authorization": `Bearer ${API_TOKEN}`,
-            "Content-Type": "application/json"
-          }
+        const response = await fetch(TEAM_API_URL, {
+          headers: { "Authorization": `Bearer ${API_TOKEN}`, "Content-Type": "application/json" }
         });
         
+        // If team endpoint fails (404/403), we'll return empty list and fallback to inferring from leads
         if (!response.ok) {
-          throw new Error(`API Error: ${response.status}`);
+           console.warn("Team API not available, using inferred data");
+           return []; 
         }
         
         const data = await response.json();
         return Array.isArray(data) ? data : [];
-      } catch (error) {
-        console.error("Failed to fetch leads:", error);
-        throw error;
+      } catch (err) {
+        console.warn("Failed to fetch team, falling back to inference", err);
+        return [];
       }
     },
   });
 
+  const isLoading = isLoadingLeads || isLoadingTeam;
+  const isError = isLeadsError; // We don't block on team error, we just fallback
+
+  const refetchAll = () => {
+    refetchLeads();
+    refetchTeam();
+  };
+
   // --- Data Processing ---
   const sdrs = useMemo(() => {
-    // Group leads by SDR Name
-    const sdrMap = new Map<string, Lead[]>();
-    
+    const sdrMap = new Map<string, SDR>();
+
+    // 1. Initialize with real team members from API if available
+    team.forEach(member => {
+       sdrMap.set(member.name, {
+         ...member,
+         leads: [],
+         performance: member.performance || Math.floor(Math.random() * 30) + 70, // Mock performance if missing
+         avatar_url: member.avatar_url || FALLBACK_AVATARS[member.name] || `https://ui-avatars.com/api/?name=${member.name}&background=random`
+       });
+    });
+
+    // 2. Distribute leads to SDRs
     leads.forEach(lead => {
       const sdrName = lead.sdr_name || "Não Atribuído";
+      
+      // If SDR doesn't exist in team list (or team list was empty), create entry
       if (!sdrMap.has(sdrName)) {
-        sdrMap.set(sdrName, []);
+        sdrMap.set(sdrName, {
+          id: `inferred-${sdrName.replace(/\s+/g, '-').toLowerCase()}`,
+          name: sdrName,
+          role: "SDR",
+          email: `${sdrName.split(' ')[0].toLowerCase()}@company.com`,
+          avatar_url: FALLBACK_AVATARS[sdrName] || `https://ui-avatars.com/api/?name=${sdrName}&background=random`,
+          performance: Math.floor(Math.random() * 30) + 70,
+          leads: []
+        });
       }
-      sdrMap.get(sdrName)?.push(lead);
+      
+      sdrMap.get(sdrName)?.leads.push(lead);
     });
 
-    // Convert map to SDR array
-    const sdrList: SDR[] = Array.from(sdrMap.entries()).map(([name, leads], index) => {
-      const meta = SDR_METADATA[name] || {};
-      return {
-        id: `sdr-${name.replace(/\s+/g, '-').toLowerCase()}`,
-        name,
-        role: meta.role || "SDR",
-        avatar: meta.avatar,
-        email: `${name.split(' ')[0].toLowerCase()}@company.com`,
-        performance: meta.performance || Math.floor(Math.random() * 30) + 70, // Fallback random performance
-        leads
-      };
-    });
-
-    return sdrList.sort((a, b) => b.leads.length - a.leads.length);
-  }, [leads]);
+    // Convert to array and sort
+    return Array.from(sdrMap.values()).sort((a, b) => b.leads.length - a.leads.length);
+  }, [leads, team]);
 
   const filteredSdrs = selectedSdrId === "all" 
     ? sdrs 
     : sdrs.filter(sdr => sdr.id === selectedSdrId);
 
-  // Helper to get all filtered leads
+  // Helper to get all filtered leads for display
   const displayLeads = useMemo(() => {
     let currentLeads = filteredSdrs.flatMap(sdr => 
-      sdr.leads.map(lead => ({ ...lead, sdrName: sdr.name, sdrAvatar: sdr.avatar }))
+      sdr.leads.map(lead => ({ ...lead, sdrName: sdr.name, sdrAvatar: sdr.avatar_url }))
     );
 
     if (searchQuery) {
@@ -190,7 +223,7 @@ export default function SdrDashboard() {
         <nav className="ml-auto flex items-center gap-4">
           <div className="flex items-center gap-2 bg-muted/50 rounded-full px-3 py-1 text-xs text-muted-foreground border">
              <span className={`w-2 h-2 rounded-full ${isLoading ? 'bg-yellow-400 animate-pulse' : isError ? 'bg-red-500' : 'bg-green-500'}`}></span>
-             {isLoading ? 'Conectando API...' : isError ? 'Erro de Conexão' : 'Conectado ao CRM'}
+             {isLoading ? 'Sincronizando...' : isError ? 'Offline' : 'Online'}
           </div>
           <Button variant="ghost" size="sm" className="text-muted-foreground">Dashboard</Button>
           <Separator orientation="vertical" className="h-6" />
@@ -206,10 +239,12 @@ export default function SdrDashboard() {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-foreground">Visão Geral de Leads</h1>
-            <p className="text-muted-foreground mt-1">Acompanhe o desempenho e os leads de cada SDR em tempo real.</p>
+            <p className="text-muted-foreground mt-1">
+              Gerenciamento de equipe e pipeline de vendas.
+            </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="icon" onClick={() => refetch()} title="Recarregar Dados">
+            <Button variant="outline" size="icon" onClick={refetchAll} title="Recarregar Dados">
                <RefreshCcw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             </Button>
             <Select value={selectedSdrId} onValueChange={setSelectedSdrId}>
@@ -233,16 +268,16 @@ export default function SdrDashboard() {
         {isLoading && (
            <div className="h-[400px] flex flex-col items-center justify-center space-y-4">
              <Loader2 className="h-10 w-10 animate-spin text-primary" />
-             <p className="text-muted-foreground animate-pulse">Carregando dados da API...</p>
+             <p className="text-muted-foreground animate-pulse">Carregando dados da equipe e leads...</p>
            </div>
         )}
 
         {/* Error State */}
         {isError && (
           <div className="p-8 border border-red-200 bg-red-50 rounded-lg text-center">
-            <p className="text-red-600 font-medium">Não foi possível carregar os leads.</p>
-            <p className="text-sm text-red-500 mt-1">Verifique sua conexão ou a chave de API.</p>
-            <Button variant="outline" className="mt-4 border-red-200 text-red-700 hover:bg-red-100" onClick={() => refetch()}>
+            <p className="text-red-600 font-medium">Erro ao carregar dados.</p>
+            <p className="text-sm text-red-500 mt-1">Verifique sua conexão ou tente novamente mais tarde.</p>
+            <Button variant="outline" className="mt-4 border-red-200 text-red-700 hover:bg-red-100" onClick={refetchAll}>
               Tentar Novamente
             </Button>
           </div>
@@ -291,9 +326,9 @@ export default function SdrDashboard() {
               <Card className="border-none shadow-sm bg-white dark:bg-card">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground">
-                    SDRs Ativos
+                    Membros da Equipe
                   </CardTitle>
-                  <Users className="h-4 w-4 text-muted-foreground" />
+                  <Briefcase className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold">{sdrs.length}</div>
@@ -305,8 +340,8 @@ export default function SdrDashboard() {
               {/* SDR List */}
               <Card className="md:col-span-2 border-none shadow-sm h-fit bg-white dark:bg-card overflow-hidden">
                 <CardHeader>
-                  <CardTitle>Equipe de SDRs</CardTitle>
-                  <CardDescription>Desempenho da API</CardDescription>
+                  <CardTitle>Equipe de Vendas</CardTitle>
+                  <CardDescription>Performance e Leads</CardDescription>
                 </CardHeader>
                 <CardContent className="p-0">
                   <div className="space-y-0">
@@ -323,13 +358,15 @@ export default function SdrDashboard() {
                         `}
                       >
                         <Avatar>
-                          <AvatarImage src={sdr.avatar} />
+                          <AvatarImage src={sdr.avatar_url} />
                           <AvatarFallback>{sdr.name.substring(0, 2)}</AvatarFallback>
                         </Avatar>
                         <div className="flex-1 overflow-hidden">
                           <h4 className="font-medium truncate">{sdr.name}</h4>
                           <div className="flex items-center text-xs text-muted-foreground gap-2">
-                            <span>{sdr.leads.length} Leads</span>
+                             <span className="truncate max-w-[80px]">{sdr.role}</span>
+                             <span>•</span>
+                             <span>{sdr.leads.length} Leads</span>
                           </div>
                         </div>
                       </div>
@@ -356,7 +393,7 @@ export default function SdrDashboard() {
                       {selectedSdrId === "all" ? "Todos os Leads" : `Leads de ${filteredSdrs[0]?.name}`}
                     </CardTitle>
                     <CardDescription>
-                      {displayLeads.length} leads recuperados
+                      {displayLeads.length} leads em carteira
                     </CardDescription>
                   </div>
                   <div className="relative w-64">
