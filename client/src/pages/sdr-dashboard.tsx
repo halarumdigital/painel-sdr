@@ -445,6 +445,7 @@ export default function SdrDashboard() {
           {isAdmin && (
             <>
               <Button
+                type="button"
                 variant="outline"
                 size="sm"
                 className="gap-2"
