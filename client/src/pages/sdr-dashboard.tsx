@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import {
   Users,
   TrendingUp,
@@ -444,16 +444,17 @@ export default function SdrDashboard() {
           </div>
           {isAdmin && (
             <>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={() => setLocation("/users")}
-              >
-                <Users className="h-4 w-4" />
-                <span className="hidden sm:inline">Usuários</span>
-              </Button>
+              <Link href="/users">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                >
+                  <Users className="h-4 w-4" />
+                  <span className="hidden sm:inline">Usuários</span>
+                </Button>
+              </Link>
               <Badge variant="outline" className="gap-1 bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400">
                 <Shield className="h-3 w-3" />
                 Admin

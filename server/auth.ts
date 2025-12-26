@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction, Express } from "express";
 import session from "express-session";
+import MySQLStore from "express-mysql-session";
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import { db } from "./db";
@@ -28,14 +29,33 @@ export async function comparePassword(password: string, hash: string): Promise<b
 }
 
 export function setupAuth(app: Express) {
+  // Trust proxy for production (nginx, etc)
+  app.set("trust proxy", 1);
+
+  // MySQL session store options
+  const MySQLStoreSession = MySQLStore(session as any);
+  const sessionStore = new MySQLStoreSession({
+    host: process.env.MYSQL_HOST || "localhost",
+    port: parseInt(process.env.MYSQL_PORT || "3306", 10),
+    user: process.env.MYSQL_USER || "root",
+    password: process.env.MYSQL_PASSWORD || "",
+    database: process.env.MYSQL_DATABASE || "sdr",
+    clearExpired: true,
+    checkExpirationInterval: 900000, // 15 minutes
+    expiration: 86400000, // 24 hours
+    createDatabaseTable: true,
+  });
+
   app.use(
     session({
       secret: process.env.SESSION_SECRET || "super-secret-key-change-in-production",
+      store: sessionStore,
       resave: false,
       saveUninitialized: false,
       cookie: {
-        secure: process.env.NODE_ENV === "production",
+        secure: false, // Set to true only if behind HTTPS proxy that properly forwards headers
         httpOnly: true,
+        sameSite: "lax",
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
       },
     })
@@ -93,14 +113,22 @@ export function registerAuthRoutes(app: Express) {
         staffId: user.staffId,
       };
 
-      res.json({
-        user: {
-          id: user.id,
-          username: user.username,
-          name: user.name,
-          role: user.role,
-          staffId: user.staffId,
-        },
+      // Save session explicitly
+      req.session.save((err) => {
+        if (err) {
+          console.error("Session save error:", err);
+          return res.status(500).json({ error: "Erro ao criar sessão" });
+        }
+
+        res.json({
+          user: {
+            id: user.id,
+            username: user.username,
+            name: user.name,
+            role: user.role,
+            staffId: user.staffId,
+          },
+        });
       });
     } catch (error) {
       console.error("Login error:", error);
